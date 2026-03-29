@@ -851,6 +851,43 @@ describe('API Gateway', () => {
     });
   });
 
+  describe('/v1/sql endpoint dataSource', () => {
+    test('returns dataSource for single query', async () => {
+      const { app } = await createApiGateway();
+      const query = JSON.stringify({ measures: ['Foo.bar'] });
+
+      const res = await request(app)
+        .get(`/cubejs-api/v1/sql?query=${encodeURIComponent(query)}`)
+        .set('Authorization', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDcSemACt8x4iTMCda8Yhe3iZaWbvV5XKSTbuAn0M')
+        .expect(200);
+
+      expect(res.body).toHaveProperty('sql');
+      expect(res.body).toHaveProperty('dataSource');
+      expect(res.body.dataSource).toBe('default');
+    });
+
+    test('returns dataSource for blending query', async () => {
+      const { app } = await createApiGateway();
+      const query = JSON.stringify([
+        { measures: ['Foo.bar'], timeDimensions: [{ dimension: 'Foo.time', granularity: 'day' }] },
+        { measures: ['Foo.bar'], timeDimensions: [{ dimension: 'Foo.time', granularity: 'day' }] }
+      ]);
+
+      const res = await request(app)
+        .get(`/cubejs-api/v1/sql?query=${encodeURIComponent(query)}`)
+        .set('Authorization', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDcSemACt8x4iTMCda8Yhe3iZaWbvV5XKSTbuAn0M')
+        .expect(200);
+
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBe(2);
+      res.body.forEach((item: any) => {
+        expect(item).toHaveProperty('sql');
+        expect(item).toHaveProperty('dataSource');
+        expect(item.dataSource).toBe('default');
+      });
+    });
+  });
+
   describe('/cubejs-system/v1', () => {
     const scheduledRefreshContextsFactory = () => ([
       { securityContext: { foo: 'bar' } },
@@ -1185,7 +1222,8 @@ describe('API Gateway', () => {
         expect.anything(),
         {},
         undefined,
-        undefined
+        undefined,
+        undefined,
       );
     });
 
@@ -1224,7 +1262,44 @@ describe('API Gateway', () => {
         expect.anything(),
         {},
         'stale-while-revalidate',
-        'America/Los_Angeles'
+        'America/Los_Angeles',
+        undefined,
+      );
+    });
+
+    test('throwContinueWait can be passed', async () => {
+      const { app, apiGateway } = await createApiGateway();
+
+      // Mock the sqlServer.execSql method
+      const execSqlMock = jest.fn(async (query, stream, securityContext, cacheMode, timezone) => {
+        // Simulate writing error to the stream
+        stream.write(`${JSON.stringify({
+          error: "Continue wait"
+        })}\n`);
+        stream.end();
+      });
+
+      apiGateway.getSQLServer().execSql = execSqlMock;
+
+      await request(app)
+        .post('/cubejs-api/v1/cubesql')
+        .set('Content-type', 'application/json')
+        .set('Authorization', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDcSemACt8x4iTMCda8Yhe3iZaWbvV5XKSTbuAn0M')
+        .send({
+          query: 'SELECT id FROM test LIMIT 3',
+          throwContinueWait: true,
+        })
+        .responseType('text')
+        .expect(200);
+
+      // Verify the mock was called with correct parameters
+      expect(execSqlMock).toHaveBeenCalledWith(
+        'SELECT id FROM test LIMIT 3',
+        expect.anything(),
+        {},
+        undefined,
+        undefined,
+        true,
       );
     });
   });

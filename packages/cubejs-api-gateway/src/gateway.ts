@@ -303,11 +303,13 @@ class ApiGateway {
           schema,
           context: {
             req,
+            res,
             apiGateway: this
           },
           graphiql: getEnv('nodeEnv') !== 'production'
             ? { headerEditorEnabled: true }
             : false,
+          extensions: () => (res as any).extensions || {},
         })(req, res);
       })
     );
@@ -449,8 +451,13 @@ class ApiGateway {
         try {
           await this.assertApiScope('data', req.context?.securityContext);
 
-          await this.sqlServer.execSql(req.body.query, res, req.context?.securityContext, req.body.cache, req.body.timezone);
+          await this.sqlServer.execSql(req.body.query, res, req.context?.securityContext, req.body.cache, req.body.timezone, req.body.throwContinueWait);
         } catch (e: any) {
+          // Quickfix for https://github.com/cube-js/cube/issues/10450,
+          // Right now, it's too complicated to fix the issue correctly, because
+          // native side control stream, without understanding that it's Express.response
+          res.removeHeader('Transfer-Encoding');
+
           this.handleError({
             e,
             query: {
@@ -1393,8 +1400,8 @@ class ApiGateway {
       });
 
       await res(queryType === QueryTypeEnum.REGULAR_QUERY ?
-        { sql: toQuery(sqlQueries[0]) } :
-        sqlQueries.map((sqlQuery) => ({ sql: toQuery(sqlQuery) })));
+        { sql: toQuery(sqlQueries[0]), dataSource: sqlQueries[0].dataSource } :
+        sqlQueries.map((sqlQuery) => ({ sql: toQuery(sqlQuery), dataSource: sqlQuery.dataSource })));
     } catch (e: any) {
       this.handleError({
         e, context, query, res, requestStarted
